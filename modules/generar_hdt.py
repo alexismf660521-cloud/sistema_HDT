@@ -7,22 +7,18 @@ from shutil import copyfile
 def generar_formularios(archivo, plantilla):
 
     # =============================
-    # CARGAR DATOS
+    # ✅ CARGAR DATOS (CORREGIDO)
     # =============================
-    df = pd.read_excel(archivo, dtype=str)
-    df.fillna("", inplace=True)
+    df = pd.read_excel(archivo, dtype=str, keep_default_na=False)
+    df = df.fillna("").astype(str)
 
     # =============================
-    # ✅ NORMALIZAR COLUMNAS (CLAVE)
+    # ✅ NORMALIZAR COLUMNAS
     # =============================
-    df.columns = (
-        df.columns
-        .str.strip()
-        .str.lower()
-    )
+    df.columns = df.columns.str.strip().str.lower()
 
     # =============================
-    # ✅ MAPEO (AJUSTADO A COLAB)
+    # ✅ MAPEO
     # =============================
     mapeo_estatico = {
         "F2": "nº caso.1",
@@ -36,12 +32,9 @@ def generar_formularios(archivo, plantilla):
         "N57": "folios"
     }
 
-    mapeo_fechas = {
-        "T2": ("fecha de recepcion", "year"),
-        "X2": ("fecha de recepcion", "month"),
-        "Z2": ("fecha de recepcion", "day")
-    }
-
+    # =============================
+    # ✅ MAPEO DE MUESTRAS
+    # =============================
     tipos_muestra_filas = {
         "sangre líquida": 17,
         "orina": 18,
@@ -69,13 +62,13 @@ def generar_formularios(archivo, plantilla):
     }
 
     # =============================
-    # CREAR CARPETA
+    # ✅ CREAR CARPETA
     # =============================
     carpeta = "salida"
     os.makedirs(carpeta, exist_ok=True)
 
     # =============================
-    # PROCESAR POR CASO
+    # 🔁 PROCESAR POR CASO
     # =============================
     for caso_id, grupo in df.groupby("caso_numero"):
 
@@ -88,38 +81,40 @@ def generar_formularios(archivo, plantilla):
         primer = grupo.iloc[0]
 
         # =============================
-        # 1. CAMPOS ESTÁTICOS
+        # ✅ CAMPOS ESTÁTICOS
         # =============================
         for celda, campo in mapeo_estatico.items():
-            valor = primer.get(campo, "")
+            valor = str(primer.get(campo, "")).strip()
             if valor:
-                ws[celda] = str(valor)
+                ws[celda] = valor
 
         # =============================
-        # 2. FECHAS
+        # ✅ FECHA (CORREGIDO)
         # =============================
-        fecha_str = primer.get("fecha de recepcion", "")
+        fecha_str = str(primer.get("fecha de recepcion", "")).strip()
 
-        try:
-            if fecha_str:
-                fecha = pd.to_datetime(fecha_str)
+        if fecha_str:
+            try:
+                fecha = pd.to_datetime(fecha_str, errors="coerce")
 
-                ws["T2"] = fecha.year
-                ws["X2"] = f"{fecha.month:02d}"
-                ws["Z2"] = f"{fecha.day:02d}"
+                if pd.notna(fecha):
+                    ws["T2"] = fecha.year
+                    ws["X2"] = f"{fecha.month:02d}"
+                    ws["Z2"] = f"{fecha.day:02d}"
 
-        except:
-            pass
+            except:
+                pass
 
         # =============================
-        # 3. EMPAQUES
+        # ✅ EMPAQUES
         # =============================
         if "id empaque" in grupo.columns:
             empaques = grupo["id empaque"].dropna().unique()
-            ws["T7"] = ", ".join([str(e) for e in empaques if e])
+            empaques = [str(e).strip() for e in empaques if str(e).strip()]
+            ws["T7"] = ", ".join(empaques)
 
         # =============================
-        # 4. MUESTRAS
+        # ✅ MUESTRAS
         # =============================
         for _, fila in grupo.iterrows():
 
@@ -128,12 +123,12 @@ def generar_formularios(archivo, plantilla):
 
             if fila_excel:
                 for col, campo in columnas_muestras.items():
-                    valor = fila.get(campo, "")
+                    valor = str(fila.get(campo, "")).strip()
                     if valor:
-                        ws[f"{col}{fila_excel}"] = str(valor)
+                        ws[f"{col}{fila_excel}"] = valor
 
         # =============================
-        # 5. EVALUACIÓN FIJA
+        # ✅ EVALUACIÓN FIJA
         # =============================
         evaluacion = {
             'B12': "Si X",
@@ -143,15 +138,19 @@ def generar_formularios(archivo, plantilla):
             'AA12': "NO X"
         }
 
-        for c, v in evaluacion.items():
-            ws[c] = v
+        for celda, valor in evaluacion.items():
+            ws[celda] = valor
 
         wb.save(nombre)
 
     # =============================
-    # ZIP FINAL
+    # ✅ ZIP FINAL (CORREGIDO)
     # =============================
     zip_path = "formularios.zip"
+
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+
     shutil.make_archive("formularios", 'zip', carpeta)
 
     return zip_path

@@ -2,101 +2,113 @@ import pandas as pd
 import re
 import os
 import shutil
+import time
 
 # =====================================================
-# 🧹 LIMPIEZA DE ARCHIVOS TEMPORALES
+# 🧹 LIMPIEZA
 # =====================================================
 def limpiar_temporales():
 
-    import shutil
-
     archivos = [
         "temp_datos.xlsx",
-        "temp_dane.xlsx",
         "temp_preparado.xlsx",
-        "plantilla.xlsx",
         "resultado.xlsx",
         "formularios.zip"
     ]
 
     for f in archivos:
-        try:
-            if os.path.exists(f):
-                os.remove(f)
-        except:
-            pass
+        if os.path.exists(f):
+            for _ in range(3):
+                try:
+                    os.remove(f)
+                    break
+                except:
+                    time.sleep(0.5)
 
-    # 🔴 limpiar carpeta salida completamente
     if os.path.exists("salida"):
-        try:
-            shutil.rmtree("salida")
-        except:
-            pass
+        for _ in range(3):
+            try:
+                shutil.rmtree("salida")
+                break
+            except:
+                time.sleep(0.5)
 
-    # 🔵 recrear carpeta vacía (importante)
     os.makedirs("salida", exist_ok=True)
+
 
 # =====================================================
 # 🧪 FUNCIÓN PRINCIPAL
 # =====================================================
 def preparar_hdt(archivo_datos, archivo_dane):
 
-    # =====================================================
-    # 📥 LEER ARCHIVOS
-    # =====================================================
-    df = pd.read_excel(archivo_datos, dtype={"Caso_Numero": str})
-    municipios_df = pd.read_excel(archivo_dane)
+    # =============================
+    # ✅ CARGA SEGURA
+    # =============================
+    df = pd.read_excel(archivo_datos, dtype=str, keep_default_na=False)
+    municipios_df = pd.read_excel(archivo_dane, dtype=str, keep_default_na=False)
 
-    df.fillna("", inplace=True)
+    df = df.fillna("").astype(str)
+    municipios_df = municipios_df.fillna("").astype(str)
 
-    # =====================================================
-    # ✅ VALIDACIÓN
-    # =====================================================
-    columnas_requeridas = [
-        "Caso_Numero",
-        "Tipo de EMP",
-        "Descripción EMP",
-        "Caso_Destino"
-    ]
+    # =============================
+    # ✅ NORMALIZAR COLUMNAS
+    # =============================
+    df.columns = df.columns.str.strip().str.lower()
+    municipios_df.columns = municipios_df.columns.str.strip().str.lower()
 
-    faltantes = [c for c in columnas_requeridas if c not in df.columns]
+    # =============================
+    # 🔍 DETECCIÓN AUTOMÁTICA DE COLUMNAS
+    # =============================
+    columnas_detectadas = {}
+
+    for col in df.columns:
+
+        if "caso" in col and ("numero" in col or "n°" in col):
+            columnas_detectadas["caso_numero"] = col
+
+        elif "tipo" in col and "emp" in col:
+            columnas_detectadas["tipo_emp"] = col
+
+        elif "descrip" in col and "emp" in col:
+            columnas_detectadas["descripcion"] = col
+
+        elif "destino" in col:
+            columnas_detectadas["destino"] = col
+
+    requeridas = ["caso_numero", "tipo_emp", "descripcion", "destino"]
+    faltantes = [c for c in requeridas if c not in columnas_detectadas]
 
     if faltantes:
-        raise Exception(f"❌ Faltan columnas: {faltantes}")
+        raise Exception(f"❌ No se pudieron detectar columnas: {faltantes}")
 
-    # =====================================================
-    # 1️⃣ MOVER Caso_Numero AL INICIO
-    # =====================================================
+    # =============================
+    # ✅ RENOMBRAR
+    # =============================
+    df.rename(columns={
+        columnas_detectadas["caso_numero"]: "Caso_Numero",
+        columnas_detectadas["tipo_emp"]: "Tipo de EMP",
+        columnas_detectadas["descripcion"]: "Descripción EMP",
+        columnas_detectadas["destino"]: "Caso_Destino"
+    }, inplace=True)
+
+    # =============================
+    # ✅ ORDENAR
+    # =============================
     col = df.pop("Caso_Numero")
     df.insert(0, "Caso_Numero", col)
 
-    # =====================================================
-    # 2️⃣ LIMPIAR Tipo de EMP
-    # =====================================================
+    # =============================
+    # ✅ LIMPIAR TIPO EMP
+    # =============================
     df["Tipo de EMP"] = df["Tipo de EMP"].apply(
         lambda x: re.sub(r'^.*?:\s*', '', str(x))
     )
 
-    # =====================================================
-    # 🔧 LIMPIEZA Caso_Destino
-    # =====================================================
-    df["Caso_Destino"] = (
-        df["Caso_Destino"]
-        .astype(str)
-        .str.strip()
-        .str.lstrip("'")
-    )
-
-    # =====================================================
-    # ✅ FUNCIONES DE EXTRACCIÓN
-    # =====================================================
+    # =============================
+    # ✅ FUNCIONES
+    # =============================
     def extraer_cantidad(texto):
-        texto = str(texto)
-        match = re.search(
-            r'(\d+\s*(?:ml|mL))',
-            texto,
-            re.IGNORECASE
-        )
+        match = re.search(r'(\d+\s*ml)', str(texto), re.IGNORECASE)
         return match.group(1) if match else ''
 
     def extraer_recipiente(texto):
@@ -108,18 +120,19 @@ def preparar_hdt(archivo_datos, archivo_dane):
             re.IGNORECASE
         )
 
-        if match:
-            return match.group(1).strip()
+        return match.group(1).strip() if match else texto.strip()
 
-        return texto.strip()
+    def extraer_dane(valor):
+        valor = str(valor).strip()
+        match = re.search(r'\d{5}', valor)
+        return match.group(0) if match else ""
 
-    # =====================================================
-    # 3️⃣ CREAR COLUMNAS DERIVADAS
-    # =====================================================
+    # =============================
+    # ✅ COLUMNAS DERIVADAS
+    # =============================
     df["Cantidad"] = df["Descripción EMP"].apply(extraer_cantidad)
     df["Recipiente"] = df["Descripción EMP"].apply(extraer_recipiente)
 
-    # Insertar en posiciones correctas
     df.insert(4, "Cantidad_tmp", df.pop("Cantidad"))
     df.insert(5, "Recipiente_tmp", df.pop("Recipiente"))
 
@@ -128,10 +141,10 @@ def preparar_hdt(archivo_datos, archivo_dane):
         "Recipiente_tmp": "Recipiente"
     }, inplace=True)
 
-    # =====================================================
-    # 4️⃣ COLUMNAS NUEVAS
-    # =====================================================
-    columnas_nuevas = [
+    # =============================
+    # ✅ COLUMNAS NUEVAS
+    # =============================
+    nuevas = [
         "ALCOHOLEMIA",
         "PSICOFÁRMACOS-PLAGUICIDAS",
         "CONTEXTO DEL CASO",
@@ -139,58 +152,46 @@ def preparar_hdt(archivo_datos, archivo_dane):
         "COMUNICACIONES CON EL CLIENTE"
     ]
 
-    for i, nombre in enumerate(columnas_nuevas, start=6):
-        df.insert(i, nombre, '')
+    for i, col in enumerate(nuevas, start=6):
+        df.insert(i, col, "")
 
-    # =====================================================
-    # 5️⃣ DANE
-    # =====================================================
-    def obtener_dane(valor):
-        if pd.notna(valor) and len(str(valor)) >= 5:
-            return str(valor)[:5]
-        return ''
+    # =============================
+    # ✅ DANE (CORREGIDO)
+    # =============================
+    df["DANE"] = df["Caso_Destino"].apply(extraer_dane)
 
-    df["DANE"] = df["Caso_Destino"].apply(obtener_dane)
-    df["DANE"] = df["DANE"].astype(str).str.zfill(5)
-
-    # =====================================================
-    # ✅ PROCESAR CODIGOS DANE
-    # =====================================================
-    municipios_df.columns = municipios_df.columns.str.strip().str.lower()
-
+    # =============================
+    # ✅ PROCESAR ARCHIVO DANE
+    # =============================
     col_codigo = None
     col_nombre = None
 
     for col in municipios_df.columns:
         if "cod" in col:
             col_codigo = col
-        if "nom" in col:
+        elif "nom" in col:
             col_nombre = col
 
-    if col_codigo is None or col_nombre is None:
-        raise Exception("❌ No se encontraron columnas de Código o Nombre")
+    if not col_codigo or not col_nombre:
+        raise Exception("❌ No se encuentran columnas en archivo DANE")
 
     municipios_df.rename(columns={
         col_codigo: "Codigo",
         col_nombre: "Nombre"
     }, inplace=True)
 
-    municipios_df["Codigo"] = municipios_df["Codigo"].astype(str).str.strip().str.zfill(5)
+    municipios_df["Codigo"] = (
+        municipios_df["Codigo"]
+        .astype(str)
+        .str.strip()
+        .str.zfill(5)
+    )
 
-    # =====================================================
-    # ✅ FORMATEAR NOMBRE DANE
-    # =====================================================
-    def formatear_nombre(texto):
-        partes = str(texto).split()
-        if len(partes) >= 2:
-            return partes[0] + " - " + " ".join(partes[1:])
-        return texto
+    municipios_df["Lugar de Origen"] = municipios_df["Nombre"]
 
-    municipios_df["Lugar de Origen"] = municipios_df["Nombre"].apply(formatear_nombre)
-
-    # =====================================================
-    # 6️⃣ MERGE FINAL
-    # =====================================================
+    # =============================
+    # ✅ MERGE FINAL
+    # =============================
     df = df.merge(
         municipios_df[["Codigo", "Lugar de Origen"]],
         left_on="DANE",
@@ -200,10 +201,10 @@ def preparar_hdt(archivo_datos, archivo_dane):
 
     df.drop(columns=["Codigo"], inplace=True)
 
-    # =====================================================
+    # =============================
     # 💾 GUARDAR
-    # =====================================================
-    output_file = "resultado.xlsx"
-    df.to_excel(output_file, index=False)
+    # =============================
+    salida = "resultado.xlsx"
+    df.to_excel(salida, index=False)
 
-    return output_file
+    return salida
